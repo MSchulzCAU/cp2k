@@ -39,7 +39,8 @@ MODULE qs_tddfpt2_methods
    USE input_constants,                 ONLY: tddfpt_dipole_velocity,&
                                               tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
-                                              tddfpt_kernel_stda
+                                              tddfpt_kernel_stda,&
+                                              tddfpt_kernel_bse
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -256,6 +257,7 @@ CONTAINS
                                kernel=tddfpt_control%kernel)
       DEALLOCATE (my_mos)
 
+      CPWARN('BEFORE FIRST BRANCH')
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          ! create environment for Full Kernel
          IF (dft_control%qs_control%xtb) THEN
@@ -278,9 +280,29 @@ CONTAINS
          END IF
          CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, do_hfx, do_admm, do_exck, &
                                           qs_env, sub_env)
+      ELSE IF  (tddfpt_control%kernel == tddfpt_kernel_full) THEN
+         ! create environment for Full Kernel
+         IF (dft_control%qs_control%xtb) THEN
+            CPABORT("TDDFPT: xTB only works with sTDA Kernel")
+         END IF
 
+         ! allocate pools and work matrices
+         nstates = tddfpt_control%nstates
+        !! Too many states cal lead to Problems
+        !! You should be warned if there are mor states
+        !! then occ-virt Combinations!!
+         CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
+         CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
+         nstate_max = nocc*nvirt
+         IF (nstates > nstate_max) THEN
+            CPWARN("NUMBER OF EXCITED STATES COULD LEAD TO PROBLEMS!")
+            CPWARN("Experimental: CHANGED NSTATES TO ITS MAXIMUM VALUE!")
+            nstates = nstate_max
+            tddfpt_control%nstates = nstate_max
+         END IF
+         CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, do_hfx, do_admm, do_exck, &
+                                          qs_env, sub_env)
       END IF
-
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          kernel_env%full_kernel => full_kernel_env
          kernel_env%admm_kernel => kernel_env_admm_aux
@@ -316,6 +338,10 @@ CONTAINS
          NULLIFY (kernel_env%full_kernel)
          NULLIFY (kernel_env%admm_kernel)
          NULLIFY (kernel_env%stda_kernel)
+      ELSE IF (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
+          kernel_env%full_kernel => full_kernel_env
+          kernel_env%admm_kernel => kernel_env_admm_aux
+          NULLIFY (kernel_env%stda_kernel)
       END IF
 
       ALLOCATE (evects(nspins, nstates))
@@ -440,6 +466,15 @@ CONTAINS
          CALL deallocate_stda_env(stda_kernel)
       ELSE IF (tddfpt_control%kernel == tddfpt_kernel_none) THEN
          !
+      ELSE IF (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
+         IF (do_admm) CALL release_kernel_env(kernel_env%admm_kernel)
+         IF (tddfpt_control%do_lrigpw) THEN
+            CALL lri_env_release(kernel_env%full_kernel%lri_env)
+            DEALLOCATE (kernel_env%full_kernel%lri_env)
+            CALL lri_density_release(kernel_env%full_kernel%lri_density)
+            DEALLOCATE (kernel_env%full_kernel%lri_density)
+         END IF
+         CALL release_kernel_env(kernel_env%full_kernel)
       ELSE
          CPABORT('Unknown kernel type')
       END IF
@@ -620,6 +655,109 @@ CONTAINS
             do_exck = .FALSE.
             do_hfxlr = .FALSE.
          END IF
+      ELSE IF (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
+         NULLIFY (xc_root)
+         xc_root => section_vals_get_subs_vals(tddfpt_section, "XC")
+         CALL section_vals_get(xc_root, explicit=explicit_root)
+         NULLIFY (xc_section)
+         IF (explicit_root) THEN
+            ! No ADIABATIC_RESCALING option possible
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "ADIABATIC_RESCALING")
+            CALL section_vals_get(xc_sub, explicit=exar)
+            IF (exar) THEN
+               CALL cp_warn(__LOCATION__, "TDDFPT Kernel with ADIABATIC_RESCALING not possible.")
+               CPABORT("TDDFPT Input")
+            END IF
+            ! No GCP_POTENTIAL option possible
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "GCP_POTENTIAL")
+            CALL section_vals_get(xc_sub, explicit=exgcp)
+            IF (exgcp) THEN
+               CALL cp_warn(__LOCATION__, "TDDFPT Kernel with GCP_POTENTIAL not possible.")
+               CPABORT("TDDFPT Input")
+            END IF
+            ! No VDW_POTENTIAL option possible
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "VDW_POTENTIAL")
+            CALL section_vals_get(xc_sub, explicit=exvdw)
+            IF (exvdw) THEN
+               CALL cp_warn(__LOCATION__, "TDDFPT Kernel with VDW_POTENTIAL not possible.")
+               CPABORT("TDDFPT Input")
+            END IF
+            ! No WF_CORRELATION option possible
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "WF_CORRELATION")
+            CALL section_vals_get(xc_sub, explicit=exwfn)
+            IF (exwfn) THEN
+               CALL cp_warn(__LOCATION__, "TDDFPT Kernel with WF_CORRELATION not possible.")
+               CPABORT("TDDFPT Input")
+            END IF
+            ! No XC_POTENTIAL option possible
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "XC_POTENTIAL")
+            CALL section_vals_get(xc_sub, explicit=expot)
+            IF (expot) THEN
+               CALL cp_warn(__LOCATION__, "TDDFPT Kernel with XC_POTENTIAL not possible.")
+               CPABORT("TDDFPT Input")
+            END IF
+            !
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "XC_FUNCTIONAL")
+            CALL section_vals_get(xc_sub, explicit=exf)
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "XC_KERNEL")
+            CALL section_vals_get(xc_sub, explicit=exk)
+            IF ((exf .AND. exk) .OR. .NOT. (exf .OR. exk)) THEN
+               CALL cp_warn(__LOCATION__, "TDDFPT Kernel needs XC_FUNCTIONAL or XC_KERNEL section.")
+               CPABORT("TDDFPT Input")
+            END IF
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "HF")
+            CALL section_vals_get(xc_sub, explicit=exhf)
+            NULLIFY (xc_sub)
+            xc_sub => section_vals_get_subs_vals(xc_root, "HFX_KERNEL")
+            CALL section_vals_get(xc_sub, explicit=exhfxk)
+            IF (exhf .AND. exhfxk) THEN
+               CALL cp_warn(__LOCATION__, "TDDFPT Kernel: HF and HFX_KERNEL are exclusive.")
+               CPABORT("TDDFPT Input")
+            END IF
+            !
+            xc_section => xc_root
+            hfx_section => section_vals_get_subs_vals(xc_section, "HF")
+            CALL section_vals_get(hfx_section, explicit=do_hfx)
+            IF (do_hfx) THEN
+               CALL section_vals_val_get(hfx_section, "FRACTION", r_val=C_hf)
+               do_hfx = (C_hf /= 0.0_dp)
+            END IF
+            !TDDFPT only works if the kernel has the same HF section as the DFT%XC one
+            IF (do_hfx) THEN
+               hfx_section_gs => section_vals_get_subs_vals(input, "DFT%XC%HF")
+               CALL compare_hfx_sections(hfx_section, hfx_section_gs, same_hfx)
+               IF (.NOT. same_hfx) THEN
+                  CPABORT("TDDFPT Kernel must use the same HF section as DFT%XC or no HF at all.")
+               END IF
+            END IF
+
+            do_admm = do_hfx .AND. dft_control%do_admm
+            IF (do_admm) THEN
+               ! 'admm_env%xc_section_primary' and 'admm_env%xc_section_aux' need to be redefined
+               CALL cp_abort(__LOCATION__, &
+                             "ADMM is not implemented for a TDDFT kernel XC-functional which is different from "// &
+                             "the one used for the ground-state calculation. A ground-state 'admm_env' cannot be reused.")
+            END IF
+            ! SET HFX_KERNEL and/or XC_KERNEL
+            IF (exk) THEN
+               do_exck = .TRUE.
+            ELSE
+               do_exck = .FALSE.
+            END IF
+            IF (exhfxk) THEN
+               do_hfxlr = .TRUE.
+            ELSE
+               do_hfxlr = .FALSE.
+            END IF
+         END IF
       ELSE
          do_hfx = .FALSE.
          do_admm = .FALSE.
@@ -702,6 +840,12 @@ CONTAINS
          ktype = "NONE"
          IF (log_unit > 0) THEN
             WRITE (log_unit, "(T2,A,T77,A4)") "KERNEL|", TRIM(ktype)
+         END IF
+      ELSE IF (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
+         ktype = "BSE"
+         IF (log_unit > 0) THEN
+            WRITE(log_unit, "(T2,A,T77,A4)") "KERNEL|", TRIM(ktype)
+            WRITE(log_unit,*) "STILL IN DEVELOPMENT"
          END IF
       ELSE
          !CPABORT("Unknown kernel")
@@ -856,6 +1000,66 @@ CONTAINS
             CALL create_fxc_kernel(work_matrices%rho_orb_struct_sub, work_matrices%fxc_rspace_sub, &
                                    xc_section, tddfpt_control%rks_triplets, sub_env, qs_env)
          END IF
+
+      ELSE IF (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
+         CALL tddfpt_construct_ground_state_orb_density( &
+            rho_orb_struct=work_matrices%rho_orb_struct_sub, &
+            rho_xc_struct=work_matrices%rho_xc_struct_sub, &
+            is_rks_triplets=tddfpt_control%rks_triplets, &
+            qs_env=qs_env, sub_env=sub_env, &
+            wfm_rho_orb=work_matrices%rho_ao_orb_fm_sub)
+
+         IF (do_admm) THEN
+            ! Full kernel with ADMM
+            IF (tddfpt_control%admm_xc_correction) THEN
+               CALL create_kernel_env(kernel_env=full_kernel_env, &
+                                      rho_struct_sub=work_matrices%rho_orb_struct_sub, &
+                                      xc_section=admm_env%xc_section_primary, &
+                                      is_rks_triplets=tddfpt_control%rks_triplets, &
+                                      sub_env=sub_env)
+            ELSE
+               CALL create_kernel_env(kernel_env=full_kernel_env, &
+                                      rho_struct_sub=work_matrices%rho_orb_struct_sub, &
+                                      xc_section=xc_section, &
+                                      is_rks_triplets=tddfpt_control%rks_triplets, &
+                                      sub_env=sub_env)
+            END IF
+
+            CALL tddfpt_construct_aux_fit_density( &
+               rho_orb_struct=work_matrices%rho_orb_struct_sub, &
+               rho_aux_fit_struct=work_matrices%rho_aux_fit_struct_sub, &
+               local_rho_set=sub_env%local_rho_set_admm, &
+               qs_env=qs_env, sub_env=sub_env, &
+               wfm_rho_orb=work_matrices%rho_ao_orb_fm_sub, &
+               wfm_rho_aux_fit=work_matrices%rho_ao_aux_fit_fm_sub, &
+               wfm_aux_orb=work_matrices%wfm_aux_orb_sub)
+
+            CALL create_kernel_env(kernel_env=kernel_env_admm_aux, &
+                                   rho_struct_sub=work_matrices%rho_aux_fit_struct_sub, &
+                                   xc_section=admm_env%xc_section_aux, &
+                                   is_rks_triplets=tddfpt_control%rks_triplets, &
+                                   sub_env=sub_env)
+            kernel_env%full_kernel => full_kernel_env
+            kernel_env%admm_kernel => kernel_env_admm_aux
+         ELSE
+            ! Full kernel
+            CALL create_kernel_env(kernel_env=full_kernel_env, &
+                                   rho_struct_sub=work_matrices%rho_orb_struct_sub, &
+                                   xc_section=xc_section, &
+                                   is_rks_triplets=tddfpt_control%rks_triplets, &
+                                   sub_env=sub_env)
+            kernel_env%full_kernel => full_kernel_env
+            NULLIFY (kernel_env%admm_kernel)
+         END IF
+         ! Fxc from kernel definition
+         do_exck = tddfpt_control%do_exck
+         kernel_env%full_kernel%do_exck = do_exck
+         ! initilize xc kernel
+         IF (do_exck) THEN
+            CALL create_fxc_kernel(work_matrices%rho_orb_struct_sub, work_matrices%fxc_rspace_sub, &
+                                   xc_section, tddfpt_control%rks_triplets, sub_env, qs_env)
+         END IF
+
       END IF
 
       ! lri input
@@ -1172,8 +1376,13 @@ CONTAINS
          CALL tddfpt_release_work_matrices(work_matrices, sub_env)
          CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, tddfpt_control%do_hfx, tddfpt_control%do_admm, &
                                           tddfpt_control%do_exck, qs_env, sub_env)
+      ELSE IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
+        IF (tddfpt_control%do_admm) CALL release_kernel_env(kernel_env%admm_kernel)
+         CALL release_kernel_env(kernel_env%full_kernel)
+         CALL tddfpt_release_work_matrices(work_matrices, sub_env)
+         CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, tddfpt_control%do_hfx, tddfpt_control%do_admm, &
+                                          tddfpt_control%do_exck, qs_env, sub_env)
       END IF
-
       DO istate = 1, nstates
          DO ispin = 1, nspins
             CALL cp_fm_release(S_evects(ispin, istate))

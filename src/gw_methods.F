@@ -38,9 +38,9 @@ MODULE gw_methods
    USE cp_fm_diag,                      ONLY: cp_fm_power
    USE cp_fm_types,                     ONLY: &
         cp_fm_create, cp_fm_get_diag, cp_fm_get_info, cp_fm_read_unformatted, cp_fm_release, &
-        cp_fm_set_all, cp_fm_to_fm, cp_fm_type, cp_fm_write_unformatted
+        cp_fm_set_all, cp_fm_to_fm, cp_fm_type, cp_fm_write_unformatted, cp_fm_write_formatted
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_type
+                                              cp_logger_type, cp_logger_get_default_unit_nr
    USE cp_output_handling,              ONLY: cp_p_file,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
@@ -123,6 +123,12 @@ CONTAINS
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fm_W_MIC_time
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: fm_Sigma_c_Gamma_time
       TYPE(mp_para_env_type), POINTER                    :: para_env
+      INTEGER                                            :: logunit, i
+      TYPE(CP_LOGGER_TYPE), POINTER                      :: logger
+
+      logger => cp_get_default_logger()
+
+      logunit = cp_logger_get_default_unit_nr(logger, local=.True.)
 
       CALL timeset(routineN, handle)
 
@@ -139,6 +145,11 @@ CONTAINS
 
       ! χ_PQ(iτ,k=0) -> χ_PQ(iω,k) -> ε_PQ(iω,k) -> W_PQ(iω,k) -> W^MIC_PQ(iτ)
       CALL get_W_MIC(bs_env, qs_env, bs_env%mat_chi_Gamma_tau, fm_W_MIC_time)
+
+      CPWARN('Langer String zum Wiederfinden')
+      do i=1, size(fm_W_MIC_time)
+          call cp_fm_write_formatted(fm_W_MIC_time(i), logunit, 'W')
+      end do
 
       ! D_µν = sum_n^occ C_µn(k=0) C_νn(k=0), V^trunc_PQ = sum_cell_R <phi_P,0|V^trunc|phi_Q,R>
       ! Σ^x_λσ(k=0) = sum_νQ [sum_P (νσ|P) V^trunc_PQ] [sum_µ (λµ|Q) D_µν)]

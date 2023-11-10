@@ -815,9 +815,9 @@ CONTAINS
       IF ((dft_control%qs_control%method_id == do_method_gpw) .OR. &
           (dft_control%qs_control%method_id == do_method_gapw_xc) .OR. &
           (dft_control%qs_control%method_id == do_method_ofgpw)) THEN
-         IF (all_potential_present) THEN
-            CPABORT("All-electron calculations with GPW, GAPW_XC, and OFGPW are not implemented")
-         END IF
+          !IF (all_potential_present) THEN
+          !CPABORT("All-electron calculations with GPW, GAPW_XC, and OFGPW are not implemented")
+         !END IF
       END IF
 
       ! DFT+U

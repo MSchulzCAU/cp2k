@@ -42,7 +42,8 @@ MODULE qs_tddfpt2_subgroups
    USE hartree_local_types,             ONLY: hartree_local_create,&
                                               hartree_local_release,&
                                               hartree_local_type
-   USE input_constants,                 ONLY: tddfpt_kernel_full,&
+   USE input_constants,                 ONLY: tddfpt_kernel_bse,&
+                                              tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
                                               tddfpt_kernel_stda
    USE input_section_types,             ONLY: section_vals_type,&
@@ -393,6 +394,108 @@ CONTAINS
          ELSE
             CALL get_qs_env(qs_env, dbcsr_dist=sub_env%dbcsr_dist, sab_orb=sub_env%sab_orb)
          END IF
+      ELSE IF (kernel == tddfpt_kernel_bse) THEN
+         ! ++ allocate a new plane wave environment
+         sub_env%is_mgrid = sub_env%is_split .OR. tddfpt_control%mgrid_is_explicit
+
+         NULLIFY (sub_env%dbcsr_dist, sub_env%dist_2d)
+         NULLIFY (sub_env%sab_orb, sub_env%sab_aux_fit)
+         NULLIFY (sub_env%task_list_orb, sub_env%task_list_aux_fit)
+         NULLIFY (sub_env%task_list_orb_soft, sub_env%task_list_aux_fit_soft)
+
+         IF (sub_env%is_mgrid) THEN
+            IF (tddfpt_control%mgrid_is_explicit) &
+               CALL init_tddfpt_mgrid(qs_control, tddfpt_control, mgrid_saved)
+
+            NULLIFY (sub_env%pw_env)
+
+            CALL pw_env_create(sub_env%pw_env)
+            CALL pw_env_rebuild(sub_env%pw_env, qs_env, sub_env%para_env)
+
+            CALL tddfpt_build_distribution_2d(distribution_2d=sub_env%dist_2d, dbcsr_dist=sub_env%dbcsr_dist, &
+                                              blacs_env=sub_env%blacs_env, qs_env=qs_env)
+            CALL tddfpt_build_tasklist(task_list=sub_env%task_list_orb, sab=sub_env%sab_orb, basis_type="ORB", &
+                                       distribution_2d=sub_env%dist_2d, pw_env=sub_env%pw_env, qs_env=qs_env, &
+                                       soft_valid=.FALSE., skip_load_balance=qs_control%skip_load_balance_distributed, &
+                                       reorder_grid_ranks=.TRUE.)
+            IF (qs_control%gapw .OR. qs_control%gapw_xc) THEN
+               CALL tddfpt_build_tasklist(task_list=sub_env%task_list_orb_soft, sab=sub_env%sab_orb, basis_type="ORB", &
+                                          distribution_2d=sub_env%dist_2d, pw_env=sub_env%pw_env, qs_env=qs_env, &
+                                          soft_valid=.TRUE., skip_load_balance=qs_control%skip_load_balance_distributed, &
+                                          reorder_grid_ranks=.TRUE.)
+            END IF
+
+            IF (dft_control%do_admm) THEN
+               CALL tddfpt_build_tasklist(task_list=sub_env%task_list_aux_fit, sab=sub_env%sab_aux_fit, &
+                                          basis_type="AUX_FIT", distribution_2d=sub_env%dist_2d, &
+                                          pw_env=sub_env%pw_env, qs_env=qs_env, soft_valid=.FALSE., &
+                                          skip_load_balance=qs_control%skip_load_balance_distributed, &
+                                          reorder_grid_ranks=.FALSE.)
+               IF (qs_control%gapw .OR. qs_control%gapw_xc) THEN
+                  CALL tddfpt_build_tasklist(task_list=sub_env%task_list_aux_fit_soft, sab=sub_env%sab_aux_fit, &
+                                             basis_type="AUX_FIT", distribution_2d=sub_env%dist_2d, &
+                                             pw_env=sub_env%pw_env, qs_env=qs_env, soft_valid=.TRUE., &
+                                             skip_load_balance=qs_control%skip_load_balance_distributed, &
+                                             reorder_grid_ranks=.FALSE.)
+               END IF
+            END IF
+
+            IF (tddfpt_control%mgrid_is_explicit) &
+               CALL restore_qs_mgrid(qs_control, mgrid_saved)
+         ELSE
+            CALL pw_env_retain(pw_env_global)
+            sub_env%pw_env => pw_env_global
+
+            CALL get_qs_env(qs_env, dbcsr_dist=sub_env%dbcsr_dist, &
+                            sab_orb=sub_env%sab_orb, task_list=sub_env%task_list_orb)
+            IF (dft_control%do_admm) THEN
+               CALL get_admm_env(admm_env, sab_aux_fit=sub_env%sab_aux_fit, &
+                                 task_list_aux_fit=sub_env%task_list_aux_fit)
+               IF (qs_control%gapw .OR. qs_control%gapw_xc) THEN
+                  sub_env%task_list_aux_fit_soft => admm_env%admm_gapw_env%task_list
+               END IF
+            END IF
+            IF (qs_control%gapw .OR. qs_control%gapw_xc) THEN
+               CALL get_qs_env(qs_env, task_list_soft=sub_env%task_list_orb_soft)
+            END IF
+         END IF
+
+         ! GAPW initializations
+         IF (dft_control%qs_control%gapw) THEN
+            CALL get_qs_env(qs_env, &
+                            atomic_kind_set=atomic_kind_set, &
+                            natom=natom, &
+                            qs_kind_set=qs_kind_set)
+
+            CALL local_rho_set_create(sub_env%local_rho_set)
+            CALL allocate_rho_atom_internals(sub_env%local_rho_set%rho_atom_set, atomic_kind_set, &
+                                             qs_kind_set, dft_control, sub_env%para_env)
+
+            CALL init_rho0(sub_env%local_rho_set, qs_env, dft_control%qs_control%gapw_control, &
+                           zcore=0.0_dp)
+            CALL rho0_s_grid_create(sub_env%pw_env, sub_env%local_rho_set%rho0_mpole)
+            CALL hartree_local_create(sub_env%hartree_local)
+            CALL init_coulomb_local(sub_env%hartree_local, natom)
+         ELSEIF (dft_control%qs_control%gapw_xc) THEN
+            CALL get_qs_env(qs_env, &
+                            atomic_kind_set=atomic_kind_set, &
+                            qs_kind_set=qs_kind_set)
+            CALL local_rho_set_create(sub_env%local_rho_set)
+            CALL allocate_rho_atom_internals(sub_env%local_rho_set%rho_atom_set, atomic_kind_set, &
+                                             qs_kind_set, dft_control, sub_env%para_env)
+         END IF
+
+         ! ADMM/GAPW
+         IF (dft_control%do_admm) THEN
+            IF (dft_control%qs_control%gapw .OR. dft_control%qs_control%gapw_xc) THEN
+               CALL get_qs_env(qs_env, atomic_kind_set=atomic_kind_set)
+               CALL local_rho_set_create(sub_env%local_rho_set_admm)
+               CALL allocate_rho_atom_internals(sub_env%local_rho_set_admm%rho_atom_set, atomic_kind_set, &
+                                                admm_env%admm_gapw_env%admm_kind_set, &
+                                                dft_control, sub_env%para_env)
+            END IF
+         END IF
+
       ELSE
          CPABORT("Unknown kernel type")
       END IF

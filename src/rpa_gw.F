@@ -1079,6 +1079,12 @@ CONTAINS
       INTEGER, DIMENSION(:), POINTER                     :: col_indices, row_indices
       REAL(KIND=dp)                                      :: delta_corr_nn, e_fermi, omega_i, &
                                                             sign_occ_virt
+      INTEGER                                            :: logunit, i
+      TYPE(CP_LOGGER_TYPE), POINTER                      :: logger
+
+      logger => cp_get_default_logger()
+
+      logunit = cp_logger_get_default_unit_nr(logger, local=.True.)
 
       CALL timeset(routineN, handle)
 
@@ -1100,7 +1106,11 @@ CONTAINS
          nm_global = col_indices(iiB)
          vec_W_gw(nm_global) = vec_W_gw(nm_global) + &
                                DOT_PRODUCT(fm_mat_S_gw_work%local_data(:, iiB), fm_mat_S_gw%local_data(:, iiB))
-
+         write(unit=logunit,fmt='(A)') 'fuck'
+         CPWARN('fuck')
+         do i=1, size(vec_W_gw)
+            write(unit=logunit,fmt='(F16.8)') vec_W_gw(i)
+         end do
          ! transform the index nm of vec_W_gw back to n and m, formulae copied from Mauro's code
          n_global = MAX(1, nm_global - 1)/nmo + 1
          m_global = nm_global - (n_global - 1)*nmo
@@ -4920,7 +4930,7 @@ CONTAINS
       do_beta = (ispin == 2)
       do_closed_shell = .NOT. (do_alpha .OR. do_beta)
       do_kpoints = (nkp_self_energy > 1)
-
+      CPWARN('fuckFUCK')
       Eigenval_last(:) = Eigenval(:)
 
       IF (unit_nr > 0) THEN
