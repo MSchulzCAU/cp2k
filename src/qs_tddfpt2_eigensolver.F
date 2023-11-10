@@ -27,7 +27,8 @@ MODULE qs_tddfpt2_eigensolver
    USE dbcsr_api,                       ONLY: dbcsr_get_info,&
                                               dbcsr_p_type,&
                                               dbcsr_type
-   USE input_constants,                 ONLY: tddfpt_kernel_full,&
+   USE input_constants,                 ONLY: tddfpt_kernel_bse,&
+                                              tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
                                               tddfpt_kernel_stda
    USE input_section_types,             ONLY: section_vals_type
@@ -387,6 +388,12 @@ CONTAINS
                   CALL cp_fm_set_all(Aop_evects(ispin, ivect), 0.0_dp)
                END DO
             END DO
+         ELSE IF (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
+            ! full TDDFPT kernel
+            CALL fhxc_kernel(Aop_evects, evects, is_rks_triplets, do_hfx, do_admm, qs_env, &
+                             kernel_env%full_kernel, kernel_env_admm_aux, sub_env, work_matrices, &
+                             tddfpt_control%admm_symm, tddfpt_control%admm_xc_correction, &
+                             do_lri_response)
          ELSE
             CPABORT("Kernel type not implemented")
          END IF
