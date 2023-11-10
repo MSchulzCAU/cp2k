@@ -280,7 +280,7 @@ CONTAINS
          END IF
          CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, do_hfx, do_admm, do_exck, &
                                           qs_env, sub_env)
-      ELSE IF  (tddfpt_control%kernel == tddfpt_kernel_full) THEN
+      ELSE IF  (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
          ! create environment for Full Kernel
          IF (dft_control%qs_control%xtb) THEN
             CPABORT("TDDFPT: xTB only works with sTDA Kernel")
