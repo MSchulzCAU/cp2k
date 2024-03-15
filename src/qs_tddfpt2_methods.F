@@ -82,7 +82,12 @@ MODULE qs_tddfpt2_methods
                                               deallocate_stda_env,&
                                               stda_env_type,&
                                               stda_init_param
+   USE qs_tddfpt2_bse_types,            ONLY: allocate_bse_env,&
+                                              deallocate_bse_env,&
+                                              bse_env_type,&
+                                              bse_init_param
    USE qs_tddfpt2_stda_utils,           ONLY: stda_init_matrices
+   USE qs_tddfpt2_bse_utils,            ONLY: bse_init_matrices
    USE qs_tddfpt2_subgroups,            ONLY: tddfpt_sub_env_init,&
                                               tddfpt_sub_env_release,&
                                               tddfpt_subgroup_env_type
@@ -157,6 +162,7 @@ CONTAINS
                                                             tddfpt_print_section, tddfpt_section, &
                                                             xc_section
       TYPE(stda_env_type), TARGET                        :: stda_kernel
+      TYPE(bse_env_type), TARGET                         :: bse_kernel
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
@@ -280,28 +286,6 @@ CONTAINS
          END IF
          CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, do_hfx, do_admm, do_exck, &
                                           qs_env, sub_env)
-      ELSE IF  (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
-         ! create environment for Full Kernel
-         IF (dft_control%qs_control%xtb) THEN
-            CPABORT("TDDFPT: xTB only works with sTDA Kernel")
-         END IF
-
-         ! allocate pools and work matrices
-         nstates = tddfpt_control%nstates
-        !! Too many states cal lead to Problems
-        !! You should be warned if there are mor states
-        !! then occ-virt Combinations!!
-         CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
-         CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
-         nstate_max = nocc*nvirt
-         IF (nstates > nstate_max) THEN
-            CPWARN("NUMBER OF EXCITED STATES COULD LEAD TO PROBLEMS!")
-            CPWARN("Experimental: CHANGED NSTATES TO ITS MAXIMUM VALUE!")
-            nstates = nstate_max
-            tddfpt_control%nstates = nstate_max
-         END IF
-         CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, do_hfx, do_admm, do_exck, &
-                                          qs_env, sub_env)
       END IF
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          kernel_env%full_kernel => full_kernel_env
@@ -339,9 +323,29 @@ CONTAINS
          NULLIFY (kernel_env%admm_kernel)
          NULLIFY (kernel_env%stda_kernel)
       ELSE IF (tddfpt_control%kernel == tddfpt_kernel_bse) THEN
-          kernel_env%full_kernel => full_kernel_env
-          kernel_env%admm_kernel => kernel_env_admm_aux
-          NULLIFY (kernel_env%stda_kernel)
+          ! setup for kernel_stda outside tddfpt_energies
+         nactive = 0
+         CALL cp_fm_get_info(gs_mos(1)%mos_occ, nrow_global=nao)
+         DO ispin = 1, SIZE(gs_mos)
+            CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, &
+                                ncol_global=nactive(ispin))
+         END DO
+         CALL allocate_bse_env(qs_env, bse_kernel, nao, nactive)
+         ! sTDA parameters
+         CALL bse_init_param(qs_env, bse_kernel, tddfpt_control%stda_control)
+         ! allocate pools and work matrices
+         nstates = tddfpt_control%nstates
+         CALL stda_create_work_matrices(work_matrices, gs_mos, nstates, &
+                                        qs_env, sub_env)
+         !
+         CALL bse_init_matrices(qs_env, bse_kernel, sub_env, &
+                                 work_matrices, tddfpt_control)
+         !
+         CPABORT('BSE is not developed further')
+         kernel_env%bse_kernel => bse_kernel
+         NULLIFY (kernel_env%full_kernel)
+         NULLIFY (kernel_env%admm_kernel)
+      
       END IF
 
       ALLOCATE (evects(nspins, nstates))

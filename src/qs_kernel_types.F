@@ -11,6 +11,7 @@ MODULE qs_kernel_types
    USE lri_environment_types,           ONLY: lri_density_type,&
                                               lri_environment_type
    USE qs_tddfpt2_stda_types,           ONLY: stda_env_type
+   USE qs_tddfpt2_bse_types,            ONLY: bse_env_type
    USE xc_derivative_set_types,         ONLY: xc_derivative_set_type,&
                                               xc_dset_release
    USE xc_rho_cflags_types,             ONLY: xc_rho_cflags_type
@@ -73,6 +74,7 @@ MODULE qs_kernel_types
       TYPE(full_kernel_env_type), POINTER                :: full_kernel => Null()
       TYPE(full_kernel_env_type), POINTER                :: admm_kernel => Null()
       TYPE(stda_env_type), POINTER                       :: stda_kernel => Null()
+      TYPE(bse_env_type), POINTER                        :: bse_kernel  => Null()
    END TYPE kernel_env_type
 
 CONTAINS
